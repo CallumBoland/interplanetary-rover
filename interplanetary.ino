@@ -1,8 +1,10 @@
 //drives the example robot
 //uses MD25;  Servo;  Ultrasound distance sensor.
 
-#include <Wire.h>  //library for I2C commuication with the MD25 board
-#include <Math.h>  //maths
+#include <Wire.h>   //library for I2C commuication with the MD25 board
+#include <Math.h>   //maths
+#include <EEPROM.h> //for saving callibration values
+#include <Servo.h>  //for servos
 
 //define lots of constants telling arduino about the MD25 driver board and how to access its registers
 #define CMD (byte)0x00      // Values of 0 being sent using write have to be cast as a byte to stop them being misinterperted as NULL (This is a bug with arduino 1)
@@ -21,10 +23,21 @@ int motor2Speed = 128;  // int motor2Speed stores a value to be used as speed da
 long motor1Dist = 0;     // int motor1Dist stores a value to be used as the distance in encoder units motor 1 will travel in a single motion
 long motor2Dist = 0;     // int motor2Dist stores a value to be used as the distance in encoder units motor 2 will travel in a single motion
 
-float encoder_to_mm = 0.9;  //NOT_USED multiply encoder value by this to get mm travelled. Calibrate based on wheel diameter.
-float angle_to_dist = 2.5;  //Number of encoder steps to angular rotation (distance=angle*angle_to_dist on each wheel). Calibrate based on wheel diameter and axle length
-float mm_to_dist = 1; //needs calibrating
-
+//calibration values
+float angle_to_dist = 3.1; //2.4558;  //Number of encoder steps per degree of rotation
+float mm_to_dist = 1.146; //1.13; //Number of encoder steps per mm of travel (1/100xpi/360)
+long pivotDistance = 155; //distance from the front which the rover pivots about
+//calibration EEPROM struct
+struct EEPROMvalues{
+  float angle;
+  float mm;
+  long pivot;
+};
+//coordinate struct
+struct coordinate{
+  long x;
+  long y;
+};
 //coordinate system(mm)
 float bearing = 0;
 long x = 0; //float?
@@ -32,26 +45,30 @@ long y = 0;
 //constants
 const long width = 200; //robot width and length
 const long length = 300; //update as required
-const long pivotDistance = 200; //distance from the front which the rover pivots about
-const long sensorDistance = 150; //the distance between the two ultrasonic sensors
-const long xMin = 0, xMax = 2400;
+const float sensorDistance = 148; //the distance between the two ultrasonic sensors
+const long xMin = 0, xMax = 2400; //arena size
 const long yMin = 0, yMax = 1600;
-const int ultrasoundDelay = 100;
+const int ultrasoundDelay = 10;
 //location coordinates(mm)
-const long targetCenter[] = {675,600};
-const long rockSamples[] = {100,0};
-const long cup1[] = {0,0}; //update as necessary
-const long cup2[] = {0,1600};
+const coordinate targetCenter = {675,600};
+const coordinate rockSamples = {100,0};
+const coordinate cup1 = {0,0}; //update as necessary
+const coordinate cup2 = {0,1600};
 //components
-const int triggerPinR = 0, triggerPinL = 0, echoPinR = 0, echoPinL = 0;
-const int inputpins[] = {triggerPinR, triggerPinL, echoPinR, echoPinL};
-const int outputpins[] = {};
-//prototypes (because arduino sucks)
-void moveManhattan(long targetX, long targetY, int speed = 127, bool xFirst = true);
-void aFindWall(int increments = 24, int speed = 127);
-void aAlign(int iterations = 3, int speed = 127);
-void aFindNorth(int speed = 127);
-
+const int gate1Pin = 11, gate2Pin = 10, forkPin = 9; //servo pins
+const int triggerPinR = 8, triggerPinL = 4, echoPinR = 7, echoPinL = 2; //ultrasound pins
+const int calibrationButtonPin = 3, leftFrontSwitch = 12, rightFrontSwitch = 13; 
+const int inputpins[] = {echoPinR, echoPinL, calibrationButtonPin, leftFrontSwitch, rightFrontSwitch}; //input pins
+const int outputpins[] = {triggerPinR, triggerPinL}; //output pins
+//servos
+Servo gate1;
+Servo gate2;
+Servo fork;
+//prototypes (because arduino compliler sucks)
+void moveManhattan(long targetX, long targetY, int speed = 20, bool xFirst = true);
+void aFindWall(int increments = 12, int speed = 10);
+void aAlign(int speed = 20);
+void aFindNorth(int speed = 20);
 
 //actual code
 void setup() {
@@ -65,8 +82,6 @@ void setup() {
   Wire.endTransmission();
 
   encoderReset();  // Calls a function which resets the encoder values to 0
-  
-  delay(2500);     // This is just to give you a bit of time for you to clear your serial monitor before the robot gets going
 
   //assign pin modes
   for(int pin : inputpins){
@@ -75,58 +90,157 @@ void setup() {
   for(int pin : outputpins){
     pinMode(pin,OUTPUT);
   }
+  digitalWrite(rightFrontSwitch,HIGH);
+  digitalWrite(leftFrontSwitch,HIGH);
+  //attach servos
+  gate1.attach(gate1Pin);
+  gate2.attach(gate2Pin);
+  fork.attach(forkPin);
+  //setup servos
+  bCloseGate(gate1);
+  bOpenGate(gate2);
+  bStowFork();
 
-
-  //actual stuff
-  taskA();
   delay(5000);
-  taskB();
+  /*
+  if(digitalRead(calibrationButtonPin)){
+    calibrate(5);
+  }
+  else {
+  */
+  taskA();
+  //delay(5000);
+  //taskB();
 }
 
 void loop() {
-  //calibration 
-  /*
-  straight(200, 20);  //go forward 200 steps at speed 20  (note that forward/back and rotation direction will depend on which motor is plugged into which side
-  turn(90, 10);      //turn 90 degrees clockwise at speed 10 
-  delay(1500);
-  */
+
+}
+
+void readEEPROM(){
+  EEPROMvalues read;
+  EEPROM.get(0, read);
+  angle_to_dist = read.angle;
+  mm_to_dist = read.mm;
+  pivotDistance = read.pivot;
+}
+void writeEEPROM(float angle, float mm, long pivot){
+  EEPROMvalues write = {angle,mm,pivot};
+  EEPROM.put(0, write);
 }
 
 void taskA(){
   //Task A: Navigation and self-location
-  
   //rotate 360deg and find nearest wall
-  aFindWall();
+  aFindWall(12, 20);
   //align with wall
-  aAlign();
+  aAlign(5);
+  aAlign(5);
+  aAlign(5);
   //rotate in 90 degrees increments and find y-axis
-  aFindNorth();
+  aFindNorth(10); //working
   //align with top edge and calibrate y coordinate
-  aAlignY();//unfinished
+  aAlignY(15);
   //move to ypos of target zone
-  manhattanY(targetCenter[1],127);
+  manhattanY(targetCenter.x,20);
   //slowly align with right wall and calibrate x coordinate
-  aAlignX();//unfinished
+  aAlignX(15);
   //move to xpos of target zone
-  manhattanX(targetCenter[0],127);
-  //done
-
-
+  manhattanX(targetCenter.y,20);
+  //done?
 }
 
 void taskB(){
-  //Task B: Sample collection and delivery 
-
+  //Task B: Sample collection and delivery
+  bLowerFork();
   //go to samples and align
+
   //grab samples
+  bGrabSamples(10);
   //deposit in cup1
+  moveManhattan(cup1.x, cup1.y,10);
+  turnToAngle(-135,10);
+  bDeposit(true);
   //deposit in cup2
+  moveManhattan(cup2.x, cup2.y,10);
+  turnToAngle(45,10);
+  bDeposit(false);
   //celebrate
+  turn(10000,100);
+}
+
+void calibrate(int speed){
+  //angle
+  Serial.println(angle_to_dist);//outputs just incase
+  Serial.println(mm_to_dist);
+  Serial.println(pivotDistance);
+  angle_to_dist = 1; //reset for calibration
+  mm_to_dist = 1;
+  pivotDistance = 0;
+  delay(10000);
+  angle_to_dist = cAngle(speed); //place in top-right corner facing north
+  //distance
+  delay(5000);
+  mm_to_dist = cDistance(speed); //place back against right wall
+  //pivot
+  delay(5000);
+  pivotDistance = cPivot(speed); //place back against any wall
+  //done?
+  writeEEPROM(angle_to_dist, mm_to_dist, pivotDistance);
+}
+//calibration stuff
+float cAngle(int speed){
+  aAlign(); //align (may suck actually)
+  long steps = 10;
+  long distanceR = 0;
+  long distanceL = 0;
+  turn(10,speed);
+  while(!(distanceL>=distanceR)){ //for rotation <45deg
+    turn(1,speed);
+    steps+=1;
+    distanceR = measureR();
+    distanceL = measureL();
+  }
+  turn(10,speed);
+  steps+=10;
+  while(!(distanceR>=distanceL)){ //up to 90deg
+    turn(1,speed);
+    steps+=1;
+    distanceR = measureR();
+    distanceL = measureL();
+  }
+  float tempAngle = steps/(90.0+atan((distanceL-distanceR)/sensorDistance)*(180/M_PI));//get rough(good) estimate for constant
+  turn(long(1800*tempAngle),speed); //5 full turns for precision
+  steps+=long(1800*tempAngle);
+  distanceR = measureR();
+  distanceL = measureL();
+  tempAngle = steps/(1800.0+90.0+atan((distanceL-distanceR)/sensorDistance)*(180/M_PI));//best estimate for constant
+  return tempAngle;
+}
+
+float cDistance(int speed){
+  straight(-10.0,speed);//move backwards for flush alignment
+  long steps=0;
+  while(!digitalRead(rightFrontSwitch)){ //trudge on until wall met
+    straight(1,speed);
+    steps+=1;
+  }
+  return float(steps)/(xMax-length); //return constant
+}
+
+long cPivot(int speed){
+  straight(-10.0,speed);
+  straight(400,speed);
+  turn(180,speed);
+  long distanceR = measureR();
+  long distanceL = measureL();
+  return (400+length-(distanceR+distanceL)/2)/2; //no way this is accurate
 }
 
 //task A stuff
 void aFindWall(int increments, int speed){
-  long closest = NULL;
+  long closest = measureR();
+  delay(ultrasoundDelay);
   long distance;
   float nearest = 0;
   for(int i=0; i<=increments; i++){
@@ -135,20 +249,20 @@ void aFindWall(int increments, int speed){
       closest = distance;
       nearest = (360.0/increments)*i;
     }
-    turn(360.0/increments, speed);
+    turnToAngle((360.0/increments)*i, speed);
   }
   turnToAngle(nearest, speed);
 }
 
-void aAlign(int iterations, int speed){
-  for(int i=0; i<=3; i++){
-    long distanceR = measureR();
-    delay(ultrasoundDelay); //necessary(maybe)
-    long distanceL = measureL();
-    delay(ultrasoundDelay);
-    float angle = atan((distanceL-distanceR)/sensorDistance)*(180/M_PI);
-    turn(angle, speed);
-  }
+void aAlign(int speed){
+  float angle = 180;
+  bearing = 0;
+  long distanceR = measureR();
+  delay(ultrasoundDelay);
+  long distanceL = measureL();
+  delay(ultrasoundDelay);
+  angle = atan((distanceL-distanceR)/sensorDistance)*(180/M_PI);
+  turnToAngle(angle, speed);
   bearing = 0;
   //potentially add section to distance self from nearby walls
 }
@@ -157,11 +271,9 @@ void aFindNorth(int speed){
   long distancesR[4];
   long distancesL[4];
   long maximums[4];
-  for(int i=0; i<=4; i++){
+  for(int i=0; i<4; i++){
     distancesR[i] = measureR();
-    delay(ultrasoundDelay);
     distancesL[i] = measureL();
-    delay(ultrasoundDelay);
     turn(90,speed);
   }
   for(int i=0; i<=4; i++){
@@ -176,20 +288,81 @@ void aFindNorth(int speed){
   turnToAngle(0,speed); //face north
 }
 
-void aAlignY(){
-
+void aAlignY(int speed){
+  //no need to turn, already facing north
+  alignmentMove(speed);
+  y=yMax-pivotDistance;
+  bearing = 0;//bearing should align with wall
+  straight(-100,speed); //move away from wall to allow turning
 }
 
-void aAlignX(){
+void aAlignX(int speed){
+  turnToAngle(90,speed);
+  alignmentMove(speed);
+  x=xMax-pivotDistance;
+  bearing = 90;//bearing should align with wall
+  straight(-100,speed); //move away from wall to allow turning
+}
+//task B stuff
+void bAlign(int speed){
+  manhattanX(rockSamples.x,speed);
+  //face north
+  //reverse onto
+}
 
+void bGrabSamples(int speed){
+  //grab first two
+  straight(-100,speed); //reverse
+  bLiftFork();
+  delay(1000); //wait for balls to move
+  bLowerFork();
+  bCloseGate(gate2);
+  //grab second two
+  straight(-100,speed); //reverse
+  bLiftFork();
+  delay(1000); //wait for balls to move
+  bLowerFork();
+  //move away
+  straight(200,speed); //move forward
+}
+
+void bDeposit(bool firstDrop){
+  bOpenGate(gate1);
+  if(!firstDrop){
+  bOpenGate(gate2);
+  }
+}
+
+
+//servo control
+void bLiftFork(){
+  fork.write(90);
+}
+
+void bLowerFork(){
+  fork.write(0);
+}
+
+void bStowFork(){
+  fork.write(180);
+}
+
+void bOpenGate(Servo gate){
+  gate.write(180);
+}
+
+void bCloseGate(Servo gate){
+  gate.write(0);
 }
 
 //basic stuff
 long measureR(){
+  delay(ultrasoundDelay);
   return(ultrasound(triggerPinR, echoPinR));
 }
 
 long measureL(){
+  delay(ultrasoundDelay);
   return(ultrasound(triggerPinL, echoPinL));
 }
 
@@ -249,9 +422,16 @@ void turnToAngle(float angle, int speed){
   turn(turnAngle, speed);
 }
 
+void alignmentMove(int speed){
+  while(!(digitalRead(leftFrontSwitch)&&digitalRead(rightFrontSwitch))){ //while not in contact with a wall
+    set_speed1(128-speed);
+    set_speed2(128-speed);
+  }
+  set_speed1(128); //halt
+  set_speed2(128);
+}
 //default stuff (mostly)
-void turn(float angle, int speed)  //turn an angle in degrees at rate given by speed (values up to 127). negative angles OK.
-{
+void turn(float angle, int speed){  //turn an angle in degrees at rate given by speed (values up to 127). negative angles OK.
 
   long ang_dist = long(angle_to_dist * angle);  //get number of encoder steps required to give angle
 
@@ -269,10 +449,10 @@ void turn(float angle, int speed)  //turn an angle in degrees at rate given by s
   moveMotor();
 }
 
-void straight(float distance, int speed)  //go straight dist encoder steps at rate speed (values up to 127) -ve speed or dist goes backwards
-{
-  long encoderDistance = long(distance * mm_to_dist); //converts from mm to encoder steps
-  float r = encoderDistance/mm_to_dist;
+void straight(float distance, int speed){  //go straight dist encoder steps at rate speed (values up to 127) -ve speed or dist goes backwards
+  long encoderDistance = -long(distance * mm_to_dist); //converts from mm to encoder steps
+  float r = -encoderDistance/mm_to_dist;
+  r = speed>0 ? r:-r; //account for negative speed
   x += r*cos(bearing*(M_PI/180)); //updates exact x and y coordinates
   y += r*sin(bearing*(M_PI/180));
   
@@ -282,12 +462,11 @@ void straight(float distance, int speed)  //go straight dist encoder steps at ra
 
   motor1Speed = 128 + speed;  // int motor1Speed stores a value to be used as speed data for motor 1 (0 is full reverse, 128 is stop, 255 is full forward)
   motor2Speed = 128 + speed;  // int motor2Speed stores a value to be used as speed data for motor 2 (0 is full reverse, 128 is stop, 255 is full forward)
-  motor1Dist = -encoderDistance;  // int motor1Dist stores the distance motor 1 will travel in the next motion
-  motor2Dist = -encoderDistance;  // int motor2Dist stores the distance motor 2 will travel in the next motion
+  motor1Dist = encoderDistance;  // int motor1Dist stores the distance motor 1 will travel in the next motion
+  motor2Dist = encoderDistance;  // int motor2Dist stores the distance motor 2 will travel in the next motion
 
   moveMotor();
 }
-
 
 void encoderReset() {  // This function resets the encoder values to 0
   delay(250);          // This delay is important (especially when using odometry), it gives the robot some time to come to rest before resetting the encoder, reducing the chance of momentum affecting your encoder values
@@ -297,7 +476,6 @@ void encoderReset() {  // This function resets the encoder values to 0
   Wire.endTransmission();
   delay(50);
 }
-
 
 long encoder1() {                       // Function to read the value of encoder 1 as a long (32 bit
   Wire.beginTransmission(MD25ADDRESS);  // Send byte to get a reading from encoder 1
@@ -356,16 +534,14 @@ void displayIntendedDist() {  // Function to display the distance the motors are
   Serial.println(" ");
 }
 
-void set_speed1(char my_speed)    //set speed 1
-{
+void set_speed1(char my_speed){    //set speed 1
    Wire.beginTransmission(MD25ADDRESS);
     Wire.write(SPEED1);
     Wire.write(my_speed);  // Sets the speed of motor 1 to a value of motor1Speed
     Wire.endTransmission();
 }
 
-void set_speed2(char my_speed)    //set speed 2
-{
+void set_speed2(char my_speed){    //set speed 2
    Wire.beginTransmission(MD25ADDRESS);
     Wire.write(SPEED2);
     Wire.write(my_speed);  // Sets the speed of motor 1 to a value of motor1Speed
@@ -374,14 +550,14 @@ void set_speed2(char my_speed)    //set speed 2
 
 void moveMotor() {  // Function that moves the robot according to the values of motor1Speed, motor2Speed, motor1Dist and motor2Dist
   encoderReset();
-  displayEncoderDist();   // Calls a function to read and display distance measured by encoders before movement begins (should be 0 or close to it)
-  displayIntendedDist();  // Calls a function to display the distance the motors are intended to travel
+  //displayEncoderDist();   // Calls a function to read and display distance measured by encoders before movement begins (should be 0 or close to it)
+  //displayIntendedDist();  // Calls a function to display the distance the motors are intended to travel
 
   //in this while loop, both motors run until both have reached their target distance.  If one of them gets there first it is stoped while the other keeps going
   //only abs() values of distance are compared, so signs are not too important.  It's the speed that controls direction.
   while ((abs(encoder1()) < abs(motor1Dist)) || (abs(encoder2()) < abs(motor2Dist))) {  // while loop which continues to run if either encoder hasn't reached it's intended distance uses absolute values to convert vector distance into scalar. The brackets might look like overkill but it is to ensure correct order of operations
 
-    displayEncoderDist();  // Calls a function to read and display distance measured by encoders during movement
+    //displayEncoderDist();  // Calls a function to read and display distance measured by encoders during movement
 
     set_speed1(motor1Speed);  // Sets the speed of motor 1 to a value of motor1Speed
     set_speed2(motor2Speed);  // Sets the speed of motor 2 to a value of motor2Speed
@@ -398,8 +574,9 @@ void moveMotor() {  // Function that moves the robot according to the values of 
   set_speed1(128); // Sets the speed of motor 1 to 128 (stop)
   set_speed2(128); // Sets the speed of motor 2 to 128 (stop)
   
- 
+  /*
   Serial.println(" ");
   displayEncoderDist();   // Calls a function to read and display distance measured by encoders after movement begins (should be close to intended travel distance)
   displayIntendedDist();  // Calls a function to display the distance the motors were intended to travel
+  */
 }
