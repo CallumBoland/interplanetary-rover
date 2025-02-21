@@ -135,10 +135,8 @@ void taskA(){
   aFindWall(12, 20);
   //align with wall
   aAlign(5);
-  aAlign(5);
-  aAlign(5);
   //rotate in 90 degrees increments and find y-axis
-  aFindNorth(10); //working
+  aFindNorth(10);
   //align with top edge and calibrate y coordinate
   aAlignY(15);
   //move to ypos of target zone
@@ -147,7 +145,7 @@ void taskA(){
   aAlignX(15);
   //move to xpos of target zone
   manhattanX(targetCenter.y,20);
-  //done?
+  //done
 }
 
 void taskB(){
@@ -238,49 +236,46 @@ long cPivot(int speed){
 }
 
 //task A stuff
-void aFindWall(int increments, int speed){
+void aFindWall(int increments, int speed){ //finds the rough angle of closest wall to the rover
   long closest = measureR();
   delay(ultrasoundDelay);
   long distance;
   float nearest = 0;
-  for(int i=0; i<=increments; i++){
+  for(int i=0; i<=increments; i++){ //rotate around 360deg
     distance = measureR();
-    if(distance<closest){
+    if(distance<closest){ //update angle as lower distances are found
       closest = distance;
       nearest = (360.0/increments)*i;
     }
-    turnToAngle((360.0/increments)*i, speed);
+    turnToAngle((360.0/increments)*i, speed);//rotate in increments
   }
-  turnToAngle(nearest, speed);
+  turnToAngle(nearest, speed); //turn to face closest wall
 }
 
-void aAlign(int speed){
-  float angle = 180;
+float aAlign(int speed){ //aligns the front face of the rover with the wall infront (multiple iterations may be required)
   bearing = 0;
   long distanceR = measureR();
-  delay(ultrasoundDelay);
   long distanceL = measureL();
-  delay(ultrasoundDelay);
-  angle = atan((distanceL-distanceR)/sensorDistance)*(180/M_PI);
+  float angle = atan((distanceL-distanceR)/sensorDistance)*(180/M_PI); //trig to find out angle that the rover needs to move
   turnToAngle(angle, speed);
   bearing = 0;
-  //potentially add section to distance self from nearby walls
+  return angle; // returns so it may be iterated outside the function
 }
 
-void aFindNorth(int speed){
-  long distancesR[4];
-  long distancesL[4];
-  long maximums[4];
-  for(int i=0; i<4; i++){
+void aFindNorth(int speed){ //locates the 'north' direction
+  long distancesR[4]; //compares distances each cardinal direction
+  long distancesL[4]; //finds the long edge of the arena, then finds the righthand edge
+  long maximums[4];   //can then face the north edge using this information
+  for(int i=0; i<4; i++){ //rotate around in 90deg increments
     distancesR[i] = measureR();
     distancesL[i] = measureL();
     turn(90,speed);
   }
-  for(int i=0; i<=4; i++){
+  for(int i=0; i<=4; i++){ //using maximum ranges to avoid detecting walls
     maximums[i] = max(distancesR[i],distancesL[i]);
   }
-  if(maximums[0]+maximums[2]>maximums[1]+maximums[3]){
-    bearing = (maximums[0]<maximums[2])? 90 : -90;
+  if(maximums[0]+maximums[2]>maximums[1]+maximums[3]){ //find longest edge
+    bearing = (maximums[0]<maximums[2])? 90 : -90; //find right hand wall and set bearing accordingly
   }
   else{
     bearing = (maximums[1]<maximums[3])? 0 : 180; 
@@ -290,17 +285,17 @@ void aFindNorth(int speed){
 
 void aAlignY(int speed){
   //no need to turn, already facing north
-  alignmentMove(speed);
-  y=yMax-pivotDistance;
-  bearing = 0;//bearing should align with wall
+  alignmentMove(speed); //ram into wall
+  y=yMax-pivotDistance; //set ypos
+  bearing = 0; //reset bearing to align
   straight(-100,speed); //move away from wall to allow turning
 }
 
 void aAlignX(int speed){
-  turnToAngle(90,speed);
-  alignmentMove(speed);
-  x=xMax-pivotDistance;
-  bearing = 90;//bearing should align with wall
+  turnToAngle(90,speed); //face east
+  alignmentMove(speed); //ram right wall
+  x=xMax-pivotDistance; //set zero
+  bearing = 90;//reset bearing to align
   straight(-100,speed); //move away from wall to allow turning
 }
 //task B stuff
@@ -357,12 +352,12 @@ void bCloseGate(Servo gate){
 
 //basic stuff
 long measureR(){
-  delay(ultrasoundDelay);
+  delay(ultrasoundDelay); //necessary delay
   return(ultrasound(triggerPinR, echoPinR));
 }
 
 long measureL(){
-  delay(ultrasoundDelay);
+  delay(ultrasoundDelay); //necessary delay
   return(ultrasound(triggerPinL, echoPinL));
 }
 
@@ -373,11 +368,11 @@ long ultrasound(int trigger, int echo){
   digitalWrite(trigger, HIGH);
   delayMicroseconds(10);
   digitalWrite(trigger, LOW);
-  // Reads the echoPin, returns the distance in millimetres
+  // Reads the echoPin, returns the distance in mm
   return(pulseIn(echo, HIGH)*0.1715);
 }
 
-void moveManhattan(long targetX, long targetY, int speed, bool xFirst){
+void moveManhattan(long targetX, long targetY, int speed, bool xFirst){ //moves to a point along the x and y axis
   if(xFirst){
     manhattanX(targetX,speed);
     manhattanY(targetY,speed);
@@ -388,8 +383,8 @@ void moveManhattan(long targetX, long targetY, int speed, bool xFirst){
   }
 }
 
-void manhattanX(long targetX, int speed){
-  if(targetX > x){
+void manhattanX(long targetX, int speed){ //move along the x-axis to a given point
+  if(targetX > x){ //face the correct direction and then move forward
     turnToAngle(90, speed);
     straight(abs(targetX-x), speed);
   }
@@ -398,8 +393,8 @@ void manhattanX(long targetX, int speed){
     straight(abs(targetX-x), speed);
   }
 }
-void manhattanY(long targetY, int speed){
-  if(targetY > y){
+void manhattanY(long targetY, int speed){ //move along the y-axis to a given point
+  if(targetY > y){ //face the correct direction and then move forward
     turnToAngle(0, speed);
     straight(abs(targetY-y), speed);
   }
@@ -410,21 +405,21 @@ void manhattanY(long targetY, int speed){
 }
 
 void moveDirect(long targetX, long targetY, int speed){ //will lose precision
-  float dx = targetX-x, dy = targetY-y;
-  float distance = sqrt(dx*dx+dy*dy);
-  double angle = atan2(targetX,targetY)*(180/M_PI);//in degrees
-  turnToAngle(angle, speed);
-  straight(distance, speed);
+  float dx = targetX-x, dy = targetY-y; //find change in distance
+  float distance = sqrt(dx*dx+dy*dy); //find direct distance
+  double angle = atan2(targetX,targetY)*(180/M_PI);//find bearing to travel in degrees
+  turnToAngle(angle, speed); //turn
+  straight(distance, speed); //move
 }
 
 void turnToAngle(float angle, int speed){
-  float turnAngle = fmod(angle-bearing+180,360)-180;
+  float turnAngle = fmod(angle-bearing+180,360)-180; //normalise angle
   turn(turnAngle, speed);
 }
 
 void alignmentMove(int speed){
   while(!(digitalRead(leftFrontSwitch)&&digitalRead(rightFrontSwitch))){ //while not in contact with a wall
-    set_speed1(128-speed);
+    set_speed1(128-speed); //move forwards at speed
     set_speed2(128-speed);
   }
   set_speed1(128); //halt
