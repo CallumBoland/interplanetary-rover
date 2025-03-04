@@ -67,7 +67,7 @@ Servo fork;
 //prototypes (because arduino compliler sucks)
 void moveManhattan(long targetX, long targetY, int speed = 20, bool xFirst = true);
 void aFindWall(int increments = 12, int speed = 10);
-void aAlign(int speed = 20);
+float aAlign(int speed = 20);
 void aFindNorth(int speed = 20);
 
 //actual code
@@ -75,7 +75,7 @@ void setup() {
   Wire.begin();        // Begin I2C bus
   Serial.begin(9600);  // Begin serial
   delay(100);          // Wait for everything to power up
-
+  Serial.println("jhole");
   Wire.beginTransmission(MD25ADDRESS);  // Set MD25 operation to MODE given by mode
   Wire.write(MODESELECTOR);
   Wire.write(mode);
@@ -132,28 +132,28 @@ void writeEEPROM(float angle, float mm, long pivot){
 void taskA(){
   //Task A: Navigation and self-location
   //rotate 360deg and find nearest wall
-  aFindWall(12, 20);
+  aFindWall(8, 10);
   //align with wall
   aAlign(5);
-  //rotate in 90 degrees increments and find y-axis
+  aAlign(5);
+  aAlign(5);
+  //find position and bearing of rover
   aFindNorth(10);
-  //align with top edge and calibrate y coordinate
-  aAlignY(15);
-  //move to ypos of target zone
-  manhattanY(targetCenter.x,20);
-  //slowly align with right wall and calibrate x coordinate
-  aAlignX(15);
-  //move to xpos of target zone
-  manhattanX(targetCenter.y,20);
+  //move to target zone
+  moveManhattan(targetCenter.x,targetCenter.y,20,false);
+  //further alignment?
   //done
 }
 
 void taskB(){
   //Task B: Sample collection and delivery
-  bLowerFork();
-  //go to samples and align
-
+  //align x against left wall
+  //bAlignX(10);
+  //move to xpos of samples
+  //manhattanX();
+  turnToAngle(0,10);
   //grab samples
+  bLowerFork();
   bGrabSamples(10);
   //deposit in cup1
   moveManhattan(cup1.x, cup1.y,10);
@@ -164,7 +164,6 @@ void taskB(){
   turnToAngle(45,10);
   bDeposit(false);
   //celebrate
-  turn(10000,100);
 }
 
 void calibrate(int speed){
@@ -237,12 +236,12 @@ long cPivot(int speed){
 
 //task A stuff
 void aFindWall(int increments, int speed){ //finds the rough angle of closest wall to the rover
-  long closest = measureR();
+  long closest = measureR()+measureL();
   delay(ultrasoundDelay);
   long distance;
   float nearest = 0;
   for(int i=0; i<=increments; i++){ //rotate around 360deg
-    distance = measureR();
+    distance = measureR()+measureL();
     if(distance<closest){ //update angle as lower distances are found
       closest = distance;
       nearest = (360.0/increments)*i;
@@ -250,6 +249,7 @@ void aFindWall(int increments, int speed){ //finds the rough angle of closest wa
     turnToAngle((360.0/increments)*i, speed);//rotate in increments
   }
   turnToAngle(nearest, speed); //turn to face closest wall
+  //add iterative rotation for accurate fast movement
 }
 
 float aAlign(int speed){ //aligns the front face of the rover with the wall infront (multiple iterations may be required)
@@ -269,18 +269,25 @@ void aFindNorth(int speed){ //locates the 'north' direction
   for(int i=0; i<4; i++){ //rotate around in 90deg increments
     distancesR[i] = measureR();
     distancesL[i] = measureL();
-    turn(90,speed);
+    turn(90,speed); //add if statement?
   }
-  for(int i=0; i<=4; i++){ //using maximum ranges to avoid detecting walls
+  for(int i=0; i<4; i++){ //using maximum ranges to avoid detecting walls
     maximums[i] = max(distancesR[i],distancesL[i]);
+    Serial.println(maximums[i]);
   }
+  int rightIndex;
   if(maximums[0]+maximums[2]>maximums[1]+maximums[3]){ //find longest edge
     bearing = (maximums[0]<maximums[2])? 90 : -90; //find right hand wall and set bearing accordingly
+    rightIndex = (maximums[0]<maximums[2])? 0 : 2;
   }
   else{
     bearing = (maximums[1]<maximums[3])? 0 : 180; 
+    rightIndex = (maximums[1]<maximums[3])? 1 : 3;  
   }
-  turnToAngle(0,speed); //face north
+  //calculate x coord from right hand wall
+  x = xMax - (maximums[rightIndex] + pivotDistance);
+  //calculate y coord from closest y wall
+  y = maximums[(rightIndex+3)%4]<maximums[(rightIndex+1)%4]? yMax - (maximums[(rightIndex+3)%4] + pivotDistance):(maximums[(rightIndex+1)%4] + pivotDistance);
 }
 
 void aAlignY(int speed){
@@ -316,7 +323,7 @@ void bGrabSamples(int speed){
   straight(-100,speed); //reverse
   bLiftFork();
   delay(1000); //wait for balls to move
-  bLowerFork();
+  bStowFork();
   //move away
   straight(200,speed); //move forward
 }
@@ -373,11 +380,11 @@ long ultrasound(int trigger, int echo){
 }
 
 void moveManhattan(long targetX, long targetY, int speed, bool xFirst){ //moves to a point along the x and y axis
-  if(xFirst){
+  if(xFirst){ //move via x-axis first
     manhattanX(targetX,speed);
     manhattanY(targetY,speed);
   }
-  else{
+  else{ //move via y-axis first
     manhattanY(targetY,speed);
     manhattanX(targetX,speed);
   }
@@ -407,7 +414,7 @@ void manhattanY(long targetY, int speed){ //move along the y-axis to a given poi
 void moveDirect(long targetX, long targetY, int speed){ //will lose precision
   float dx = targetX-x, dy = targetY-y; //find change in distance
   float distance = sqrt(dx*dx+dy*dy); //find direct distance
-  double angle = atan2(targetX,targetY)*(180/M_PI);//find bearing to travel in degrees
+  double angle = atan2(dx,dy)*(180/M_PI);//find bearing to travel in degrees
   turnToAngle(angle, speed); //turn
   straight(distance, speed); //move
 }
@@ -448,8 +455,8 @@ void straight(float distance, int speed){  //go straight dist encoder steps at r
   long encoderDistance = -long(distance * mm_to_dist); //converts from mm to encoder steps
   float r = -encoderDistance/mm_to_dist;
   r = speed>0 ? r:-r; //account for negative speed
-  x += r*cos(bearing*(M_PI/180)); //updates exact x and y coordinates
-  y += r*sin(bearing*(M_PI/180));
+  x += r*sin(bearing*(M_PI/180)); //updates exact x and y coordinates
+  y += r*cos(bearing*(M_PI/180));
   
   if (speed > 127) speed = 127;  //limit speed to maximum and minimum permitted value
   if (speed < -127) speed = -127;
