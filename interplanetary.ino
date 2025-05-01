@@ -125,13 +125,15 @@ void taskA(){
   //rotate 360deg and find nearest wall
   //aFindWall(8, 20);
   //align with wall
-  aAlign(0, 5, -1.0, 1, 0);
+  aAlign(0, 10, -1.0, 10.0, 0);
+  turnToAngle(90,10);
+  aAlign(0, 5, -1.0, 3.0, 0);
   //find position and bearing of rover
-  aFindCoordinates(10);
+  aFindCoordinates(20);
   //move to target zone
-  moveManhattan(targetRough.x,targetRough.y, 25, 10, false, false, false);
+  moveManhattan(targetRough.x,targetRough.y, 60, 20, false, false, false);
   //further alignment?
-  aFinalAlign(10);
+  aFinalAlign(20);
   //done
   buzz();
 }
@@ -152,17 +154,17 @@ void taskB(){
   bLowerFork();
   bGrabSamples(10);
   //reallign
-  bCup1Realign(15);
+  bCup1Realign(30,15);
   //deposit in cup1
   moveManhattan(cup1.x, cup1.y,15,10,false,false,true);
   turnToAngle(-135,10);
-  bDeposit(10, 130, true);
+  bDeposit(15, 130, true);
   //reallign
-  bCup2Realign(20,10);
+  bCup2Realign(40,15);
   //deposit in cup2
   moveManhattan(cup2.x, cup2.y,15,10,true,true,false);
   turnToAngle(-45,10);
-  bDeposit(10, 130, false);
+  bDeposit(15, 130, false);
   //celebrate
   buzz();
 }
@@ -192,7 +194,7 @@ void aAlign(int zero, int speed, float maxTurn, float exit, int layer){ //aligns
   bearing = zero;
   long distanceR = measureR();
   long distanceL = measureL();
-  float angle = zero + atan((distanceL-distanceR)/sensorDistance)*(180/M_PI); //trig to find out angle that the rover needs to move
+  float angle = zero + atan2((distanceL-distanceR),sensorDistance)*(180/M_PI); //trig to find out angle that the rover needs to move
   if(abs(angle-zero)>maxTurn && maxTurn > 0 && layer<5){
     aAlign(zero,speed,maxTurn,exit, layer+1);
   }
@@ -271,11 +273,12 @@ void bGrabSamples(int speed){
   bCloseGate(gate2);
   //grab second two
   straight(-125,speed); //reverse
-  bLiftFork();
+  bLiftFork2();//prevent launching
+  straight(100,speed);
+  bliftFork2();
   delay(1000); //wait for balls to move
   bStowFork();
   //move out
-  straight(100,speed);
 }
 
 void bDeposit(int speed, long forward, bool firstDrop){
@@ -290,11 +293,11 @@ void bDeposit(int speed, long forward, bool firstDrop){
   straight(-forward, speed);
 }
 
-void bCup1Realign(int speed){
+void bCup1Realign(int speed, int preciseSpeed){
   bAlignX(speed);
-  straight(-300,speed);
-  turnToAngle(180,speed);
-  alignmentMove(speed);
+  straight(-300,preciseSpeed);
+  turnToAngle(180,preciseSpeed);
+  alignmentMove(preciseSpeed);
   y=pivotDistance;
 }
 
@@ -346,6 +349,10 @@ void slowServo(Servo servo, int start, int end, int d){
 
 void bLiftFork(){
   slowServo(fork, fork.readMicroseconds(), 1200, 20);
+}
+
+void bLiftFork2(){
+  slowServo(fork, fork.readMicroseconds(), 800, 20);
 }
 
 void bLowerFork(){
