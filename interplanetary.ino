@@ -275,7 +275,7 @@ void bGrabSamples(int speed){
   straight(-125,speed); //reverse
   bLiftFork2();//prevent launching
   straight(100,speed);
-  bliftFork2();
+  bLiftFork();
   delay(1000); //wait for balls to move
   bStowFork();
   //move out
