@@ -24,6 +24,7 @@ int motor2Speed = 128;  // int motor2Speed stores a value to be used as speed da
 long motor1Dist = 0;     // int motor1Dist stores a value to be used as the distance in encoder units motor 1 will travel in a single motion
 long motor2Dist = 0;     // int motor2Dist stores a value to be used as the distance in encoder units motor 2 will travel in a single motion
 bool lastTaskState; //for switching tasks
+bool caution = true;
 
 //calibration values
 float angle_to_dist = 3; //2.4558;  //Number of encoder steps per degree of rotation
@@ -41,28 +42,29 @@ long y = 0;
 //constants
 const long width = 200; //robot width and length
 const long length = 300; //update as required
-const float sensorDistance = 148; //the distance between the two ultrasonic sensors
+const float sensorDistance = 120; //the distance between the two ultrasonic sensors
 const long xMin = 0, xMax = 2400; //arena size
 const long yMin = 0, yMax = 1600;
 const int ultrasoundDelay = 50;
 //location coordinates(mm)
 const coordinate targetRough = {725,850};
-const coordinate targetCenter = {725,605};
-const coordinate rockSamples = {767,490};
+const coordinate targetCenter = {705,625};
+const coordinate rockSamples = {767,500};
 const coordinate cup1 = {300,300}; //update as necessary
 const coordinate cup2 = {300,1300};
 //components
-const int gate1Pin = 5, gate2Pin = 9, forkPin = 3; //servo pins
+const int gate1Pin = 5, gate2Pin = 9, gate3Pin = 11, forkPin = 3; //servo pins
 const int triggerPinR = 8, triggerPinL = 4, echoPinR = 7, echoPinL = 2; //ultrasound pins
-const int taskSwitchPin = 13, leftFrontSwitch = 11, rightFrontSwitch = 12, buzzerPin = 10; 
+const int taskSwitchPin = 13, leftFrontSwitch = 0, rightFrontSwitch = 12, buzzerPin = 10; 
 const int inputpins[] = {echoPinR, echoPinL, taskSwitchPin, leftFrontSwitch, rightFrontSwitch}; //input pins
 const int outputpins[] = {triggerPinR, triggerPinL, buzzerPin}; //output pins
 //servos
 Servo gate1;
 Servo gate2;
+Servo gate3;
 Servo fork;
 //buzzer
-int melody[] = {NOTE_E5, NOTE_D5, NOTE_FS4, NOTE_GS4,  NOTE_CS5, NOTE_B4, NOTE_D4, NOTE_E4,  NOTE_B4, NOTE_A4, NOTE_CS4, NOTE_E4,  NOTE_A4};
+int melody[] = {NOTE_E5, NOTE_D5, NOTE_FS4, NOTE_GS4,  NOTE_CS5, NOTE_B4, NOTE_D4, NOTE_E4,  NOTE_B4, NOTE_A4, NOTE_CS4, NOTE_E4, NOTE_A4};
 int durations[] = {8, 8, 4, 4,  8, 8, 4, 4,  8, 8, 4, 4,  2};
 
 //actual code
@@ -90,15 +92,16 @@ void setup() {
   //attach servos
   gate1.attach(gate1Pin);
   gate2.attach(gate2Pin);
+  gate3.attach(gate3Pin);
   fork.attach(forkPin);
   //setup servos
   bCloseGate(gate1);
   bOpenGateReverse(gate2);
+  bOpenGate(gate3);
   bStowFork();
-  //delay(5000);
-  //taskA();
-  //delay(5000);
-  //taskB();
+  //start
+  //
+  
   taskSelect(true);
 }
 
@@ -122,24 +125,28 @@ void taskSelect(bool first){
 
 void taskA(){
   //Task A: Navigation and self-location
-  //rotate 360deg and find nearest wall
-  //aFindWall(8, 20);
+  startBuzz();
   //align with wall
+  caution = false;
   aAlign(0, 10, -1.0, 10.0, 0);
-  turnToAngle(90,10);
-  aAlign(0, 5, -1.0, 3.0, 0);
+  turnToAngle(-90,15);
+  aAlign(0, 5, 60.0, 5.0, 0);
+  caution = true;
   //find position and bearing of rover
   aFindCoordinates(20);
   //move to target zone
-  moveManhattan(targetRough.x,targetRough.y, 60, 20, false, false, false);
+  caution = false;
+  moveManhattan(targetRough.x,targetRough.y, 70, 20, false, false, false);
+  caution = true;
   //further alignment?
-  aFinalAlign(20);
+  aFinalAlign(15);
   //done
   buzz();
 }
 
 void taskB(){
   //Task B: Sample collection and delivery
+  startBuzz();
   bearing = -90.0;
   x=targetCenter.x;
   y=targetCenter.y;
@@ -148,23 +155,22 @@ void taskB(){
   //move to xpos of samples
   manhattanX(rockSamples.x, 15, 10, true);
   turnToAngle(0, 10);
-  delay(2000); //testing delay
   //grab samples
-  bAlignY(20);
+  bAlignY(10);
   bLowerFork();
   bGrabSamples(10);
   //reallign
-  bCup1Realign(30,15);
+  bCup1Realign(40,15);
   //deposit in cup1
   moveManhattan(cup1.x, cup1.y,15,10,false,false,true);
   turnToAngle(-135,10);
-  bDeposit(15, 130, true);
+  bDeposit(15, 110, true);
   //reallign
-  bCup2Realign(40,15);
+  bCup2Realign(30,15,60);
   //deposit in cup2
   moveManhattan(cup2.x, cup2.y,15,10,true,true,false);
   turnToAngle(-45,10);
-  bDeposit(15, 130, false);
+  bDeposit(15, 110, false);
   //celebrate
   buzz();
 }
@@ -246,6 +252,7 @@ void aFinalAlign(int speed){
   straight(targetCenter.y-y,speed);
   //x alignment
   turnToAngle(-90,speed);
+  x=((measureR()+measureL())/2) + pivotDistance;
   straight(x-targetCenter.x,speed);
 }
 
@@ -265,49 +272,63 @@ void bAlignY(int speed){
 
 void bGrabSamples(int speed){
   //grab first two
+  //manhattanY()???
   straight(rockSamples.y-y,speed);
+  bLiftFork2();
   bLiftFork();
   delay(1000); //wait for balls to move
   straight(20,speed);
   bLowerFork();
   bCloseGate(gate2);
   //grab second two
-  straight(-125,speed); //reverse
+  straight(-150,speed); //reverse
   bLiftFork2();//prevent launching
   straight(100,speed);
   bLiftFork();
-  delay(1000); //wait for balls to move
+  straight(50,speed);
   bStowFork();
   //move out
 }
 
 void bDeposit(int speed, long forward, bool firstDrop){
   straight(forward, speed);
+  bCloseGate(gate3);
   bOpenGate(gate1);
-  delay(2000);
+  delay(1000);
+  bCloseGate(gate1);
+  bOpenGate(gate3);
+  delay(1000);
+  bOpenGate(gate1);
+  delay(1000);
   if(firstDrop){
     bCloseGate(gate1);
     delay(100);
     bOpenGate(gate2);
+    straight(-forward, speed);
   }
-  straight(-forward, speed);
 }
 
 void bCup1Realign(int speed, int preciseSpeed){
   bAlignX(speed);
+  alignmentMove(preciseSpeed);
   straight(-300,preciseSpeed);
   turnToAngle(180,preciseSpeed);
   alignmentMove(preciseSpeed);
   y=pivotDistance;
 }
 
-void bCup2Realign(int speed, int preciseSpeed){
+void bCup2Realign(int speed, int preciseSpeed, int fastSpeed){
   bAlignX(speed);
   straight(-250,speed);
   turnToAngle(0,speed);
+  caution = false;
+  straight(800,fastSpeed);
+  caution = true;
   alignmentMove(speed);
+  alignmentMove(preciseSpeed);
   y=yMax-pivotDistance;
-  straight(-250,preciseSpeed);
+  bearing = 0;
+  manhattanY(cup2.y,preciseSpeed,preciseSpeed,true);
   bAlignX(preciseSpeed);
 }
 
@@ -330,8 +351,12 @@ void buzz(){
   }
 }
 
+void startBuzz(){
+  tone(buzzerPin, 500, 1000);
+}
+
 //servo control
-void slowServo(Servo servo, int start, int end, int d){
+void slowServo(Servo servo, int start, int end, int d){//slower servo control
   if (start<end) {
     for(int i = start/10; i<end/10; i++){
       servo.writeMicroseconds(i*10);
@@ -347,12 +372,28 @@ void slowServo(Servo servo, int start, int end, int d){
   servo.writeMicroseconds(end);
 }
 
+void slowServoAngle(Servo servo, int start, int end, int d){//slower servo control but by angle rather than time
+  if (start<end) {
+    for(int i = start; i<end; i++){
+      servo.write(i);
+      delay(d);
+    }
+  }
+  else{
+    for(int i = start; i>end; i--){
+      servo.write(i);
+      delay(d);
+    }
+  }
+  servo.write(end);
+}
+
 void bLiftFork(){
-  slowServo(fork, fork.readMicroseconds(), 1200, 20);
+  slowServo(fork, fork.readMicroseconds(), 1300, 30);
 }
 
 void bLiftFork2(){
-  slowServo(fork, fork.readMicroseconds(), 800, 20);
+  slowServo(fork, fork.readMicroseconds(), 675, 20);
 }
 
 void bLowerFork(){
@@ -606,7 +647,7 @@ void moveMotor(bool correction) {  // Function that moves the robot according to
   set_speed2(128); // Sets the speed of motor 2 to 128 (stop)
 
   //corrections
-  if(correction){
+  if(correction && caution){
     correctMovement(3);
   }
   
